@@ -1,9 +1,0 @@
-#Ghidra Lock File
-#Mon Jun 29 14:13:03 CEST 2026
-<META>\ Supports\ File\ Channel\ Locking=Channel Lock
-Hostname=kaliwi
-OS\ Architecture=amd64
-OS\ Name=Linux
-OS\ Version=6.19.14+kali-amd64
-Timestamp=6/29/26, 2\:13\u202FPM
-Username=rhamiel
