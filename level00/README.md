@@ -14,11 +14,11 @@ Then, let's see what's lying around in our home directory :
 
 ```
 level00@OverRide:~$ ls -l
-total 8
--rwsr-sr-x 1 level00 level00 5138 Mar  6  2016 level00
+total 12
+-rwsr-s---+ 1 level01 users 7280 Sep 10  2016 level00
 ```
 
-Interesting... The file `level00` belongs to us, but look at those permissions. The `s` bits (setuid and setgid) mean that when we execute it, it runs with the privileges of its owner rather than ours. That's exactly the kind of thing we're looking for.
+Interesting... look at those permissions. The file is owned by `level01` and carries the `s` bits (setuid and setgid), which means that when we execute it, it runs with the privileges of its owner (`level01`) rather than ours. That's exactly the kind of thing we're looking for.
 
 ## Running the binary
 
@@ -83,13 +83,22 @@ Authenticated!
 $
 ```
 
-And we get our shell. Since the binary runs with elevated privileges, this shell does too. We can now read the next level's password :
+And we get our shell. Since the binary runs with the privileges of its owner (`level01`), this shell does too. We can now read the next level's password :
 
 ```
 $ whoami
 level01
-$ cat /home/user/level01/.pass
+$ cat /home/users/level01/.pass
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+We can then log in properly as `level01` :
+
+```
+$ exit
+level00@OverRide:~$ su level01
+Password:
+level01@OverRide:~$
 ```
 
 Level 00, clear... Progress to next level ? (Y/n) : ___
